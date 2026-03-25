@@ -5,15 +5,15 @@ app.use(express.json({ limit: "10mb" }));
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-// ── Supabaseヘルパー ─────────────────────────────────────
+// ── SupabaseHelper ─────────────
 async function sbFetch(path, options = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    ...options,
-    headers: {
-      "apikey": SUPABASE_KEY,
-      "Authorization": `Bearer ${SUPABASE_KEY}`,
+    ...オプション、
+    ヘッダー: {
+      "apikey": SUPABASE_KEY、
+      "認証": `ベアラー ${SUPABASE_KEY}`、
       "Content-Type": "application/json",
-      "Prefer": "return=representation",
+      「優先」: 「return=表現」
       ...(options.headers || {}),
     },
   });
@@ -22,7 +22,7 @@ async function sbFetch(path, options = {}) {
   catch { return { ok: res.ok, data: text }; }
 }
 
-// ── 患者API ──────────────────────────────────────────────
+// ── 患者API ──────────────────
 app.get("/api/patients", async (req, res) => {
   const r = await sbFetch("patients?order=created_at.desc");
   if (!r.ok) return res.status(500).json({ error: "取得失敗" });
@@ -35,7 +35,7 @@ app.post("/api/patients", async (req, res) => {
   res.json(Array.isArray(r.data) ? r.data[0] : r.data);
 });
 
-// ── カルテAPI ────────────────────────────────────────────
+// ── カルテAPI ─────────────────
 app.get("/api/records", async (req, res) => {
   const { patient_id } = req.query;
   const path = patient_id
@@ -57,39 +57,49 @@ app.delete("/api/records/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
-// ── multer ───────────────────────────────────────────────
+// ── マルター ─────────────────
 const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-// ── 音声アップロードAPI ──────────────────────────────────
+// ── 音声アップロードAPI ─────────────
 app.post("/api/upload-audio", upload.single("audio"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "ファイルが必要です" });
-  try {
+  試す {
     const mime = req.file.mimetype || "audio/mp4";
     const ext = mime.includes("mp4") || mime.includes("m4a") ? "mp4" : mime.includes("ogg") ? "ogg" : mime.includes("wav") ? "wav" : "webm";
     const filename = `${Date.now()}.${ext}`;
     const uploadRes = await fetch(`${SUPABASE_URL}/storage/v1/object/audio/${filename}`, {
-      method: "POST",
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": mime,
+      メソッド: "POST",
+      ヘッダー: {
+        "apikey": SUPABASE_KEY、
+        "認証": `ベアラー ${SUPABASE_KEY}`、
+        「Content-Type」: mime、
         "x-upsert": "true",
       },
-      body: req.file.buffer,
+      ボディ: req.file.buffer、
     });
     if (!uploadRes.ok) throw new Error(await uploadRes.text());
     res.json({ audio_url: `${SUPABASE_URL}/storage/v1/object/public/audio/${filename}` });
   } catch (e) {
-    console.error("Audio upload error:", e);
+    console.error("音声アップロードエラー:", e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── 文字起こしAPI ────────────────────────────────────────
+// ── 歯科専門用語ヒント（Whisper精度向上） ───────────
+const DENTAL_PROMPT = `歯科診療の録音です。以下の専門用語が含まれる可能性があります：
+【歯型】1番〜8番、上顎、下顎、正しい、意見、口蓋側、頬側、近心、遠心、噛み合わせ面、切縁
+【症状】齲蝕、齲窩、歯髄炎、根尖性歯周炎、根尖病変、歯周炎、歯肉炎、歯肉腫脹、歯肉出血、排膿、瘻孔、動揺、咬合痛、自発痛、冷水痛、温熱痛、打診痛、圧痛、過敏症
+【検査】打診、触診、温度診、電気歯髄診、歯周ポケット、BOP、プロービング、デンタルX線、パノラマX線、CBCT、根尖部透過像、骨吸収
+【処置】抜髄、根管治療、根管拡大、根管洗浄、根管充填、仮封、上髄、生活歯髄切断、抜歯、縫合、歯周外科、スケーリング、ルートプレーニング、SRP、形成、印象、噛み合採得、装着、セメント合着、続いて、コンポジットレジン充填、アマルガム
+【補綴】クラウン、インレー、アンレー、ブリッジ、義歯、部分床義歯、総義歯、インプラント、アバットメント、上部構造
+【薬剤】リドカイン、キシロカイン、エピネフリン、水酸化カルシウム、ユージノール、ZOE、ガッタパーチャ、アモキシシリン、クラリスロマイシン、ロキソプロフェン、カロナール
+【その他】ラバーダム、バキューム、エアー、エンジン、超音波スケーラー、フッ化物、シーラント、ホワイトニング`;
+
+// ── 文字起こしAPI ─----------------------------------------------------------------------
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "音声ファイルが必要です" });
-  try {
+  試す {
     const { OpenAI, toFile } = require("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const mime = req.file.mimetype || "";
@@ -98,39 +108,59 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
     else if (mime.includes("ogg")) ext = "ogg";
     else if (mime.includes("wav")) ext = "wav";
     const file = await toFile(req.file.buffer, `audio.${ext}`, { type: mime || "audio/mp4" });
-    const result = await openai.audio.transcriptions.create({ file, model: "whisper-1", language: "ja" });
+    const result = await openai.audio.transcriptions.create({
+      ファイル、
+      モデル: "whisper-1"、
+      言語: "ja",
+      プロンプト: DENTAL_PROMPT, // 歯科専門用語のヒントを追加
+    });
     res.json({ text: result.text });
   } catch (e) {
-    console.error("Transcribe error:", e);
+    console.error("転記エラー:", e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ── SOAP生成API ──────────────────────────────────────────
+// ── SOAP生成API ──────────────
 app.post("/api/soap", async (req, res) => {
   const { transcript, patientContext } = req.body;
   if (!transcript) return res.status(400).json({ error: "テキストが必要です" });
-  try {
+  試す {
     const Anthropic = require("@anthropic-ai/sdk");
     const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const prompt = `あなたは歯科医師のカルテ作成支援AIです。
-以下の患者情報と診療内容をもとに、SOAP形式のカルテを作成してください。
+    constプロンプト = `あなたは日本の歯科医師のカルテ作成を支援する専門AIです。
+以下の患者情報と診療内容の記録をもとに、正確なSOAP形式のカルテを作成してください。
 
-${patientContext ? "【患者情報】\n" + patientContext + "\n\n" : ""}【診療内容】
-${transcript}
+【歯科専門用語の正規化ルール】
+- 「虫歯」→「齲蝕」、「神経」→「歯髄」、「神経覚悟」→「抜髄」
+- 「根っこの治療」→「根管治療」、「膿」→「排膿」または「膿瘍」
+- 「歯茎」→「歯肉」、「歯茎の腫れ」→「歯肉腫脹」
+- 「レントゲン」→「X線」または「デンタルX線」
+- 「被せ物」→「クラウン」、「詰め物」→「インレー」または「充填物」
+- 「入れ歯」→「義歯」、「ブリッジ」はそのまま
+- 「抜く」→「抜歯」、「縫う」→「縫合」
+・「歯石取り」→「スケーリング」
+- 「痛み止め」→薬品名（ロキソプロフェン、カロナール等）
+- 数字＋「番」は歯番号式として記載（例：「右下6番」→「右下6番（46）」）
+- 打診で「痛い」→「打診痛（+）」、「痛くない」→「打診痛（-）」
+- 冷たいもので「しみる」→「冷水痛（+）」
 
-歯科SOAP形式で整理してください：
-- S：患者の主訴・自覚症状
-- O：診察所見・検査結果・X線所見
-- A：診断・評価
-- P：治療計画・処置内容・投薬
+${patientContext ? "【患者情報】\n" +patientContext + "\n\n" : ""}【診療内容（文字起こし）】
+${トランスクリプト}
 
-JSONのみで返答（前後のテキスト不要）：
-{"S":"...","O":"...","A":"...","P":"..."}`;
+【出力指示】
+上記を歯科専門用語に正規化しながらSOAP形式で整理してください：
+- S（主観）：患者の主訴・自覚症状・患者理由（患者の言葉を専門用語に変換）
+- O（目的）：視診・触診・打診・温度診・X線所見・歯周ポケット等の客観的な所見（＋/－で記載）
+- A（評価）：歯科の診断名・状態評価（正式な診断名を使用）
+- P（計画）：今回の措置内容・次回予定・投薬・患者指導（具体的な措置名を使用）
+
+JSONのみで対応（前後のテキスト・マークダウン不要）：
+`{"S":"...","O":"...","A":"...","P":"..."}`;
     const msg = await client.messages.create({
-      model: "claude-sonnet-4-5",
-      max_tokens: 1024,
-      messages: [{ role: "user", content: prompt }],
+      モデル: "claude-sonnet-4-5",
+      max_tokens: 1024、
+      メッセージ: [{ role: "user", content: prompt }],
     });
     const raw = msg.content.map(b => b.text || "").join("");
     const soap = JSON.parse(raw.replace(/```json|```/g, "").trim());
@@ -140,7 +170,7 @@ JSONのみで返答（前後のテキスト不要）：
   }
 });
 
-// ── フロントエンド ────────────────────────────────────────
+// ── フロントエンド ─----------------------------------------------------------------------
 app.get("/", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="ja">
@@ -149,7 +179,7 @@ app.get("/", (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="歯科カルテAI">
-<title>歯科 SOAP カルテ AI</title>
+<title>歯科用SOAPカルテAI</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@600&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 :root{--accent:#2d6a4f;--bg:#f5f3ee;--surface:#fff;--surface2:#f0ede6;--border:#ddd9d0;--border2:#c8c3b8;--text:#1a1916;--muted:#7a7468;--rec:#c62828;}
@@ -230,21 +260,21 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
 .hsoap{padding:14px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 @media(max-width:500px){.hsoap{grid-template-columns:1fr}}
 .hsi-l{font-family:monospace;font-size:11px;font-weight:700;margin-bottom:3px;}
-.hsi-l.s{color:#1565c0}.hsi-l.o{color:#2e7d32}.hsi-l.a{color:#e65100}.hsi-l.p{color:#6a1b9a}
+.hsi-ls{color:#1565c0}.hsi-lo{color:#2e7d32}.hsi-la{color:#e65100}.hsi-lp{color:#6a1b9a}
 .hsi-t{font-size:12px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 .empty{text-align:center;padding:60px 20px;color:var(--muted);}
 .srch{display:flex;gap:8px;margin-bottom:12px;}
 .srch input{flex:1;}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#2d6a4f;color:white;padding:10px 20px;border-radius:24px;font-size:13px;z-index:9999;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.2);display:none;}
-.toast.err{background:var(--rec);}
+.toast.err{背景:var(--rec);}
 .page{display:none;}
 .page.active{display:block;}
 .loading{text-align:center;padding:40px;color:var(--muted);}
 </style>
 </head>
 <body>
-<header><span class="logo">歯科 SOAP カルテ AI</span></header>
-<nav>
+<header><span class="logo">歯科用SOAPカルテAI</span></header>
+<ナビゲーション>
   <button class="tab active" onclick="showTab('input',this)">新規カルテ</button>
   <button class="tab" onclick="showTab('history',this)">カルテ履歴 <span class="badge" id="hbadge">0</span></button>
   <button class="tab" onclick="showTab('patients',this)">患者管理</button>
@@ -252,16 +282,16 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
 
 <!-- 新規カルテ -->
 <div class="page active" id="page-input">
-<main>
+<メイン>
   <div class="card">
     <div class="card-hdr">患者情報</div>
     <div class="card-body">
       <div class="fg">
-        <div><label class="fl">患者氏名</label><input type="text" id="pName" placeholder="山田 太郎"></div>
-        <div><label class="fl">生年月日</label><input type="date" id="pDob"></div>
-        <div><label class="fl">性別</label><select id="pGender"><option value="">——</option><option>男性</option><option>女性</option><option>その他</option></select></div>
+        <div><label class="fl">患者氏名</label><input type="text" id="pName" placeholder="山田太郎"></div>
+        <div><label class="fl">安心</label><input type="date" id="pDob"></div>
+        <div><label class="fl"> </label><select id="pGender"><option value="">——</option><option>男性</option><option>女性</option><option>その他</option></select></div>
         <div><label class="fl">患者ID</label><input type="text" id="pId" placeholder="PT-0001"></div>
-        <div><label class="fl">診療日</label><input type="date" id="pDate"></div>
+        <div><label class="fl">事業日</label><input type="date" id="pDate"></div>
         <div><label class="fl">担当医</label><input type="text" id="pDoc"></div>
         <div><label class="fl">保険種別</label><select id="pIns"><option value="">——</option><option>社会保険</option><option>国民健康保険</option><option>後期高齢者医療</option><option>労災</option><option>自費</option></select></div>
         <div class="w"><label class="fl">既往歴・アレルギー</label><input type="text" id="pHist" placeholder="例：高血圧、ペニシリンアレルギー"></div>
@@ -271,8 +301,8 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
         <div class="tc-scroll" id="tcArea"></div>
         <div class="tc-legend">
           <span class="li"><span class="ld" style="background:#fff3e0;border-color:#b5541a"></span>患部</span>
-          <span class="li"><span class="ld" style="background:#e8f5e9;border-color:#2d6a4f"></span>処置済</span>
-          <span class="li"><span class="ld" style="background:#fce4ec;border-color:#e91e63"></span>欠損</span>
+          <span class="li"><span class="ld" style="background:#e8f5e9;border-color:#2d6a4f"></span> 手続き完了</span>
+          <span class="li"><span class="ld" style="background:#fce4ec;border-color:#e91e63"></span> </span>
         </div>
       </div>
     </div>
@@ -299,23 +329,25 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
     </div>
     <div class="ts">
       <label class="fl" style="display:block;margin-bottom:8px">文字起こし / 診療メモ（編集可能）</label>
-      <textarea id="ta" rows="8" placeholder="録音後ここに文字起こしが表示されます。または直接入力してください。&#10;&#10;例：患者は右下6番が3日前から痛いと来院。咬合痛あり。打診痛+。X線にて根尖部透過像確認。"></textarea>
+      <textarea id="ta" rows="8" placeholder="録音された後ここに文字起こしが表示されます。または直接入力してください。
+
+例：患者は右下6番が3日前から痛いと痛い。咬合痛あり。打診痛+。X線にて根尖部透過像確認。"></textarea>
       <button class="abtn" id="aBtn" onclick="analyze()">SOAP形式でAI分析・カルテ生成</button>
       <div class="err" id="errMsg"></div>
     </div>
   </div>
 
   <div class="card" id="soapCard" style="display:none">
-    <div class="card-hdr">SOAP カルテ出力</div>
+    <div class="card-hdr">SOAPカルテ出力</div>
     <div class="card-body">
       <div class="sg">
-        <div class="sc ss"><div class="sh"><span class="sl s">S</span><div><div class="sn">Subjective</div><div class="sn2">主訴・主観的情報</div></div></div><div class="sb2"><div id="sc-s" class="scont"></div></div></div>
-        <div class="sc so"><div class="sh"><span class="sl o">O</span><div><div class="sn">Objective</div><div class="sn2">客観的情報・所見</div></div></div><div class="sb2"><div id="sc-o" class="scont"></div></div></div>
-        <div class="sc sa"><div class="sh"><span class="sl a">A</span><div><div class="sn">Assessment</div><div class="sn2">評価・診断</div></div></div><div class="sb2"><div id="sc-a" class="scont"></div></div></div>
-        <div class="sc sph"><div class="sh"><span class="sl p">P</span><div><div class="sn">Plan</div><div class="sn2">治療計画</div></div></div><div class="sb2"><div id="sc-p" class="scont"></div></div></div>
+        <div class="sc ss"><div class="sh"><span class="sl s">S</span><div><div class="sn">主観</div><div class="sn2">主訴・主観的情報</div></div></div><div class="sb2"><div id="sc-s" class="scont"></div></div></div>
+        <div class="sc so"><div class="sh"><span class="sl o">O</span><div><div class="sn">客観</div><div class="sn2">客観的な情報・所見</div></div></div><div class="sb2"><div id="sc-o" class="scont"></div></div></div>
+        <div class="sc sa"><div class="sh"><span class="sl a">A</span><div><div class="sn">評価</div><div class="sn2">評価・診断</div></div></div><div class="sb2"><div id="sc-a" class="scont"></div></div></div>
+        <div class="sc sph"><div class="sh"><span class="sl p">P</span><div><div class="sn">計画</div><div class="sn2">治療計画</div></div></div><div class="sb2"><div id="sc-p" class="scont"></div></div></div>
       </div>
       <div class="sa2">
-        <button class="abtn" id="saveBtn" onclick="saveRecord()" style="flex:1">💾 カルテを保存（クラウド）</button>
+        <button class="abtn" id="saveBtn" onclick="saveRecord()" style="flex:1">💾カルテを保存（クラウド）</button>
         <button class="sbtn" onclick="printSoap()">🖨️ PDF</button>
       </div>
       <div id="saveMsg"></div>
@@ -326,7 +358,7 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
 
 <!-- カルテ履歴 -->
 <div class="page" id="page-history">
-<main>
+<メイン>
   <div class="srch">
     <input type="text" id="searchInput" placeholder="患者名・日付・診断名で検索..." oninput="filterHistory()">
   </div>
@@ -336,7 +368,7 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
 
 <!-- 患者管理 -->
 <div class="page" id="page-patients">
-<main>
+<メイン>
   <div id="patList"><div class="loading"><span class="sp2"></span> 読み込み中...</div></div>
 </main>
 </div>
@@ -344,20 +376,20 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
 <div class="toast" id="toast"></div>
 
 <script>
-document.getElementById('pDate').value=new Date().toISOString().slice(0,10);
+document.getElementById('pDate').value = new Date().toISOString().slice(0, 10);
 
-// 歯式
+// 歯型
 const UPPER=[18,17,16,15,14,13,12,11,21,22,23,24,25,26,27,28];
 const LOWER=[48,47,46,45,44,43,42,41,31,32,33,34,35,36,37,38];
 const TS=['','affected','treated','missing'];
 const toothSt={};
 function buildChart(){
-  const area=document.getElementById('tcArea');
+  const area = document.getElementById('tcArea');
   [UPPER,LOWER].forEach((row,ri)=>{
     const d=document.createElement('div');d.className='jaw';
-    const lbl=document.createElement('span');lbl.className='jl';lbl.textContent=ri===0?'上':'下';d.appendChild(lbl);
+    const lbl = document.createElement('span'); lbl.className = 'jl'; lbl.textContent = ri === 0 ? '上' : '下'; d.appendChild(lbl);
     row.slice(0,8).forEach(n=>d.appendChild(mkTooth(n)));
-    const dv=document.createElement('span');dv.className='jd';d.appendChild(dv);
+    const dv = document.createElement('span'); dv.className = 'jd'; d.appendChild(dv);
     row.slice(8).forEach(n=>d.appendChild(mkTooth(n)));
     area.appendChild(d);
   });
@@ -365,12 +397,12 @@ function buildChart(){
 function mkTooth(n){
   const t=document.createElement('div');t.className='tooth';t.textContent=n;t.id='t'+n;
   t.onclick=()=>{const c=toothSt[n]||'';const nx=TS[(TS.indexOf(c)+1)%TS.length];toothSt[n]=nx;t.className='tooth'+(nx?' '+nx:'');};
-  return t;
+  tを返す。
 }
 buildChart();
 function getTeeth(){return Object.entries(toothSt).filter(([,v])=>v).map(([k,v])=>k+'('+(v==='affected'?'患部':v==='treated'?'処置済':'欠損')+')').join(', ');}
 
-// タブ
+//タブ
 function showTab(t,el){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
@@ -384,27 +416,27 @@ function showTab(t,el){
 let mr=null,chunks=[],recOn=false,timerInt=null,sec=0,currentAudioBlob=null;
 function toggleRec(){recOn?stopRec():startRec();}
 async function startRec(){
-  try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  試す{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
     const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t))||'';
-    mr=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+    mr = new MediaRecorder(stream, mime ? { mimeType: mime } : { });
     chunks=[];currentAudioBlob=null;
     mr.ondataavailable=e=>{if(e.data?.size>0)chunks.push(e.data);};
     mr.onstop=async()=>{
-      const blob=new Blob(chunks,{type:chunks[0]?.type||'audio/mp4'});
+      const blob = new Blob(chunks,{type:chunks[0]?.type||'audio/mp4'});
       currentAudioBlob=blob;
-      document.getElementById('audioEl').src=URL.createObjectURL(blob);
+      document.getElementById('audioEl').src = URL.createObjectURL(blob);
       document.getElementById('audioWrap').style.display='block';
-      await sendWhisper(blob);
+      sendWhisper(blob)を待機する。
     };
     mr.start(1000);recOn=true;sec=0;
     timerInt=setInterval(()=>{sec++;const m=String(Math.floor(sec/60)).padStart(2,'0'),s=String(sec%60).padStart(2,'0');document.getElementById('vTimer').textContent=m+':'+s;},1000);
     document.getElementById('recBtn').classList.add('rec');
-    document.getElementById('vStatus').textContent='録音中… タップで停止';
+    document.getElementById('vStatus').textContent='録音中…タップで停止';
     document.getElementById('vStatus').className='vs r';
     document.getElementById('micSvg').innerHTML='<path d="M6 6h12v12H6z"/>';
   }catch(e){
-    toast(e.name==='NotAllowedError'?'マイクの使用を許可してください':'録音できません。テキストを直接入力してください。','err');
+    トースト(e.name==='NotAllowedError'?'マイクの使用を許可してください':'録音できません。テキストを直接入力してください。','err');
   }
 }
 function stopRec(){
@@ -416,23 +448,23 @@ function stopRec(){
   document.getElementById('micSvg').innerHTML='<path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-1.5 14.93A7 7 0 0 1 5 9H3a9 9 0 0 0 8 8.94V21H9v2h6v-2h-2v-2.07z"/>';
 }
 async function uploadAudioFile(e){
-  const f=e.target.files[0];if(!f)return;
+  const f = e.target.files[0]; if (!f) return;
   currentAudioBlob=f;
-  document.getElementById('audioEl').src=URL.createObjectURL(f);
+  document.getElementById('audioEl').src = URL.createObjectURL(f);
   document.getElementById('audioWrap').style.display='block';
   document.getElementById('vStatus').textContent='文字起こし中...';
-  await sendWhisper(f);
+  sendWhisper(f)を待機します。
 }
 async function sendWhisper(blob){
   const ext=(blob.type||'').includes('mp4')?'mp4':(blob.type||'').includes('ogg')?'ogg':'webm';
-  const fd=new FormData();fd.append('audio',blob,'rec.'+ext);
-  try{
-    const r=await fetch('/api/transcribe',{method:'POST',body:fd});
-    const d=await r.json();
+  const fd = new FormData(); fd.append('audio', blob, 'rec.' + ext);
+  試す{
+    const r = await fetch('/api/transcribe', {method:'POST', body: fd});
+    const d = await r.json();
     if(!r.ok)throw new Error(d.error);
     const ta=document.getElementById('ta');
     ta.value=(ta.value?ta.value+'\\n':'')+d.text;
-    toast('文字起こし完了');
+    トースト('文字起こし完了');
   }catch(e){toast('文字起こし失敗: '+e.message,'err');}
   document.getElementById('vStatus').textContent='タップして録音開始';
   document.getElementById('vStatus').className='vs';
@@ -441,9 +473,9 @@ async function sendWhisper(blob){
 // SOAP分析
 let currentSoap=null;
 async function analyze(){
-  const tr=document.getElementById('ta').value.trim();
+  const tr = document.getElementById('ta').value.trim();
   if(!tr){toast('テキストを入力してください','err');return;}
-  const btn=document.getElementById('aBtn');
+  const btn = document.getElementById('aBtn');
   btn.disabled=true;btn.innerHTML='<div class="sp"></div> AIが分析中...';
   document.getElementById('errMsg').textContent='';
   document.getElementById('soapCard').style.display='none';
@@ -452,78 +484,78 @@ async function analyze(){
     document.getElementById('pDob').value&&'年齢：'+calcAge(document.getElementById('pDob').value),
     document.getElementById('pGender').value&&'性別：'+document.getElementById('pGender').value,
     getTeeth()&&'歯式：'+getTeeth(),
-    document.getElementById('pHist').value&&'既往歴：'+document.getElementById('pHist').value,
+    document.getElementById('pHist').value&&' 既往歴：'+document.getElementById('pHist').value,
   ].filter(Boolean).join('\\n');
-  try{
-    const r=await fetch('/api/soap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:tr,patientContext:ctx})});
-    const d=await r.json();
+  試す{
+    const r = await fetch('/api/soap', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({transcript:tr,patientContext:ctx})});
+    const d = await r.json();
     if(!r.ok)throw new Error(d.error);
-    currentSoap=d.soap;
+    currentSoap = d.soap;
     ['s','o','a','p'].forEach(k=>{document.getElementById('sc-'+k).textContent=d.soap[k.toUpperCase()]||'記録なし';});
     document.getElementById('soapCard').style.display='block';
   }catch(e){document.getElementById('errMsg').textContent='エラー: '+e.message;}
   btn.disabled=false;btn.textContent='SOAP形式でAI分析・カルテ生成';
 }
 
-// カルテ保存
+//カルテ保存
 async function saveRecord(){
   if(!currentSoap){toast('先にSOAPを生成してください','err');return;}
-  const btn=document.getElementById('saveBtn');
-  const msg=document.getElementById('saveMsg');
+  const btn = document.getElementById('saveBtn');
+  const msg = document.getElementById('saveMsg');
   btn.disabled=true;btn.innerHTML='<div class="sp"></div> 保存中...';
   msg.textContent='';msg.className='';
-  try{
+  試す{
     let audio_url=null;
     if(currentAudioBlob){
       const ext=(currentAudioBlob.type||'').includes('mp4')?'mp4':(currentAudioBlob.type||'').includes('ogg')?'ogg':'webm';
-      const fd=new FormData();fd.append('audio',currentAudioBlob,'rec.'+ext);
-      const ar=await fetch('/api/upload-audio',{method:'POST',body:fd});
+      const fd = new FormData(); fd.append('audio', currentAudioBlob, 'rec.' + ext);
+      const ar = await fetch('/api/upload-audio', {method:'POST', body: fd});
       if(ar.ok){const ad=await ar.json();audio_url=ad.audio_url;}
     }
     const pr=await fetch('/api/patients',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
       name:document.getElementById('pName').value||'（未入力）',
-      dob:document.getElementById('pDob').value||null,
-      gender:document.getElementById('pGender').value,
-      patient_id:document.getElementById('pId').value,
-      insurance:document.getElementById('pIns').value,
-      history:document.getElementById('pHist').value,
+      dob:document.getElementById('pDob').value||null、
+      性別:document.getElementById('pGender').value、
+      patient_id:document.getElementById('pId').value、
+      保険:document.getElementById('pIns').value、
+      履歴:document.getElementById('pHist').value、
     })});
-    const pat=await pr.json();
+    const pat = await pr.json();
     const rr=await fetch('/api/records',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-      patient_id:pat.id,
+      患者ID:pat.id、
       visit_date:document.getElementById('pDate').value||new Date().toISOString().slice(0,10),
-      doctor:document.getElementById('pDoc').value,
-      teeth_chart:toothSt,
-      transcript:document.getElementById('ta').value,
-      soap_s:currentSoap.S,soap_o:currentSoap.O,soap_a:currentSoap.A,soap_p:currentSoap.P,
-      audio_url,
+      医師:document.getElementById('pDoc').value、
+      teeth_chart:toothSt、
+      トランスクリプト:document.getElementById('ta').value、
+      soap_s:currentSoap.S、soap_o:currentSoap.O、soap_a:currentSoap.A、soap_p:currentSoap.P、
+      オーディオURL、
     })});
     if(!rr.ok)throw new Error('カルテの保存に失敗しました');
-    toast('カルテを保存しました！');
+    トースト('カルテを保存しました！');
     msg.textContent='✓ クラウドに保存されました';msg.className='ok';
   }catch(e){
-    toast('保存失敗: '+e.message,'err');
+    トースト('保存失敗: '+e.message,'err');
   }
-  btn.disabled=false;btn.innerHTML='💾 カルテを保存（クラウド）';
+  btn.disabled=false;btn.innerHTML='💾カルテを保存（クラウド）';
 }
 
 // 履歴
 let allRecords=[];
-async function loadHistory(){
+非同期関数 loadHistory(){
   document.getElementById('histList').innerHTML='<div class="loading"><span class="sp2"></span> 読み込み中...</div>';
-  try{
-    const r=await fetch('/api/records');
+  試す{
+    const r = await fetch('/api/records');
     allRecords=await r.json();
-    document.getElementById('hbadge').textContent=allRecords.length;
+    document.getElementById('hbadge').textContent = allRecords.length;
     renderHistory(allRecords);
   }catch(e){document.getElementById('histList').innerHTML='<div class="empty">読み込みに失敗しました</div>';}
 }
 function filterHistory(){
-  const q=document.getElementById('searchInput').value.toLowerCase();
+  const q = document.getElementById('searchInput').value.toLowerCase();
   renderHistory(q?allRecords.filter(e=>(e.patient_name||'').toLowerCase().includes(q)||(e.visit_date||'').includes(q)||(e.soap_a||'').toLowerCase().includes(q)):allRecords);
 }
 function renderHistory(records){
-  const el=document.getElementById('histList');
+  const el = document.getElementById('histList');
   if(!records.length){el.innerHTML='<div class="card"><div class="empty">カルテがありません</div></div>';return;}
   el.innerHTML=records.map(e=>\`
 <div class="card" style="margin-bottom:12px">
@@ -545,21 +577,21 @@ function renderHistory(records){
 </div>\`).join('');
 }
 function doPrint(jsonStr){
-  const e=JSON.parse(jsonStr);
+  const e = JSON.parse(jsonStr);
   printEntry({name:e.patient_name||'',date:e.visit_date||'',doctor:e.doctor||'',insurance:'',teeth:'',soap:{S:e.soap_s,O:e.soap_o,A:e.soap_a,P:e.soap_p}});
 }
 async function delRecord(id){
-  if(!confirm('このカルテを削除しますか？'))return;
+  if(!confirm('このカルテを削除しますか?'))return;
   await fetch('/api/records/'+id,{method:'DELETE'});
   loadHistory();toast('削除しました');
 }
 
 // 患者管理
-async function loadPatients(){
+非同期関数 loadPatients(){
   document.getElementById('patList').innerHTML='<div class="loading"><span class="sp2"></span> 読み込み中...</div>';
-  try{
-    const r=await fetch('/api/patients');
-    const patients=await r.json();
+  試す{
+    const r = await fetch('/api/patients');
+    const patients = await r.json();
     if(!patients.length){
       document.getElementById('patList').innerHTML='<div class="card"><div class="empty">患者データがありません<br><small>カルテを保存すると登録されます</small></div></div>';return;
     }
@@ -582,8 +614,8 @@ async function loadPatients(){
 }
 async function loadPatRec(pid,name){
   document.getElementById('patList').innerHTML='<div class="loading"><span class="sp2"></span> 読み込み中...</div>';
-  const r=await fetch('/api/records?patient_id='+pid);
-  const records=await r.json();
+  const r = await fetch('/api/records?patient_id=' + pid);
+  const records = await r.json();
   allRecords=[...allRecords,...records];
   document.getElementById('patList').innerHTML=\`
 <button class="bsm" onclick="loadPatients()" style="margin-bottom:12px">← 患者一覧に戻る</button>
@@ -601,7 +633,7 @@ async function loadPatRec(pid,name){
     \${['s','o','a','p'].map(l=>\`<div><div class="hsi-l \${l}">\${l.toUpperCase()}</div><div class="hsi-t">\${e['soap_'+l]||'——'}</div></div>\`).join('')}
   </div>
 </div>\`).join(''):'<div class="card"><div class="empty">カルテがありません</div></div>'}
-\`;
+`;
 }
 
 // PDF出力
@@ -619,26 +651,26 @@ function printEntry(e){
 <div><b>診療日：</b>\${e.date||'—'}</div>
 \${e.doctor?'<div><b>担当医：</b>'+e.doctor+'</div>':''}
 \${e.insurance?'<div><b>保険：</b>'+e.insurance+'</div>':''}
-\${e.teeth?'<div><b>歯式：</b>'+e.teeth+'</div>':''}
+\${e.teeth?'<div><b>歯型：</b>'+e.teeth+'</div>':''}
 </div>
-\${[['S','主訴・主観的情報','ss'],['O','客観的情報・所見','so'],['A','評価・診断','sa'],['P','治療計画','sp']].map(([l,n,c])=>\`<div class="si \${c}"><div class="sh">\${l} — \${n}</div><div class="sb">\${e.soap?.[l]||'記録なし'}</div></div>\`).join('')}
+\${[['S','主訴・主観的情報','ss'],['O','客観的情報・所見','so'],['A','評価・診断','sa'],['P','治療計画','sp']]].map(([l,n,c])=>\`<div class="si \${c}"><div class="sh">\${l} — \${n}</div><div class="sb">\${e.soap?.[l]||'記録なし'}</div></div>\`).join('')}
 </body></html>\`;
-  const blob=new Blob([html],{type:'text/html'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.target='_blank';a.click();
+  const blob = new Blob([html],{type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.click();
   setTimeout(()=>URL.revokeObjectURL(url),5000);
 }
 
 // ユーティリティ
 function calcAge(dob){
-  if(!dob)return'';
+  if(!dob) return '';
   const b=new Date(dob),t=new Date();
-  let a=t.getFullYear()-b.getFullYear();
+  let a = t.getFullYear() - b.getFullYear();
   if(t.getMonth()-b.getMonth()<0||(t.getMonth()===b.getMonth()&&t.getDate()<b.getDate()))a--;
-  return a+'歳';
+  a+'歳'を返します;
 }
 function toast(msg,type=''){
-  const el=document.getElementById('toast');
+  const el = document.getElementById('toast');
   el.textContent=msg;el.className='toast'+(type?' '+type:'');
   el.style.display='block';clearTimeout(el._t);
   el._t=setTimeout(()=>el.style.display='none',type?5000:2500);
@@ -649,4 +681,4 @@ function toast(msg,type=''){
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+app.listen(PORT, () => console.log("サーバーはポート " + PORT + で実行中です");
