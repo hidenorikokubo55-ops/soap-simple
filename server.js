@@ -47,18 +47,28 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "音声ファイルが必要です" });
   try {
-    const { OpenAI } = require("openai");
+    const { OpenAI, toFile } = require("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const { Readable } = require("stream");
-    const stream = Readable.from(req.file.buffer);
-    stream.path = "audio." + (req.file.mimetype.includes("mp4") ? "mp4" : req.file.mimetype.includes("ogg") ? "ogg" : "webm");
+
+    // MIMEタイプから拡張子を決定（iOSはaudio/mp4またはaudio/x-m4a）
+    const mime = req.file.mimetype || "";
+    let ext = "webm";
+    if (mime.includes("mp4") || mime.includes("m4a") || mime.includes("mpeg")) ext = "mp4";
+    else if (mime.includes("ogg")) ext = "ogg";
+    else if (mime.includes("wav")) ext = "wav";
+    else if (mime.includes("webm")) ext = "webm";
+
+    const filename = `audio.${ext}`;
+    const file = await toFile(req.file.buffer, filename, { type: mime || "audio/mp4" });
+
     const result = await openai.audio.transcriptions.create({
-      file: stream,
+      file,
       model: "whisper-1",
       language: "ja",
     });
     res.json({ text: result.text });
   } catch (e) {
+    console.error("Transcribe error:", e);
     res.status(500).json({ error: e.message });
   }
 });
