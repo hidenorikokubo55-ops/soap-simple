@@ -134,7 +134,122 @@ app.delete("/api/records/:id", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// ── multer ───────────────────────────────────────────────
+// ── CSVエクスポートAPI ───────────────────────────────────
+app.get("/api/export-csv", requireAuth, async (req, res) => {
+  try {
+    // カルテデータを全件取得
+    const r = await sbFetch("records?order=visit_date.desc&limit=10000");
+    if (!r.ok) throw new Error("データ取得失敗");
+    const records = r.data;
+
+    if (!records.length) {
+      return res.status(404).json({ error: "エクスポートするデータがありません" });
+    }
+
+    // CSV ヘッダー（Dental Queen V3取り込み想定項目）
+    const headers = [
+      "患者氏名", "生年月日", "性別", "患者ID", "保険種別",
+      "診療日", "担当医", "歯式",
+      "S（主訴・主観的情報）",
+      "O（客観的情報・所見）",
+      "A（評価・診断）",
+      "P（治療計画）",
+      "文字起こしテキスト"
+    ];
+
+    // CSV 行データ生成
+    const escapeCSV = (val) => {
+      if (val == null) return "";
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = records.map(r => [
+      escapeCSV(r.patient_name || ""),
+      escapeCSV(r.patient_dob || ""),
+      escapeCSV(r.patient_gender || ""),
+      escapeCSV(r.patient_id_code || ""),
+      escapeCSV(r.insurance || ""),
+      escapeCSV(r.visit_date || ""),
+      escapeCSV(r.doctor || ""),
+      escapeCSV(r.teeth_chart ? Object.entries(r.teeth_chart).filter(([,v])=>v).map(([k,v])=>`${k}(${v==='affected'?'患部':v==='treated'?'処置済':'欠損'})`).join(' ') : ""),
+      escapeCSV(r.soap_s || ""),
+      escapeCSV(r.soap_o || ""),
+      escapeCSV(r.soap_a || ""),
+      escapeCSV(r.soap_p || ""),
+      escapeCSV(r.transcript || ""),
+    ].join(","));
+
+    // BOM付きUTF-8（Excel/Windows対応）
+    const bom = "\uFEFF";
+    const csv = bom + headers.map(h => `"${h}"`).join(",") + "\r\n" + rows.join("\r\n");
+
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="soap_karute_${date}.csv"`);
+    res.send(csv);
+  } catch (e) {
+    console.error("CSV export error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 期間指定CSVエクスポート
+app.get("/api/export-csv/range", requireAuth, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    let path = "records?order=visit_date.desc&limit=10000";
+    if (from) path += `&visit_date=gte.${from}`;
+    if (to) path += `&visit_date=lte.${to}`;
+
+    const r = await sbFetch(path);
+    if (!r.ok) throw new Error("データ取得失敗");
+    const records = r.data;
+
+    if (!records.length) {
+      return res.status(404).json({ error: "指定期間にデータがありません" });
+    }
+
+    const escapeCSV = (val) => {
+      if (val == null) return "";
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const headers = [
+      "患者氏名", "生年月日", "性別", "患者ID", "保険種別",
+      "診療日", "担当医", "歯式",
+      "S（主訴・主観的情報）", "O（客観的情報・所見）",
+      "A（評価・診断）", "P（治療計画）", "文字起こしテキスト"
+    ];
+
+    const rows = records.map(r => [
+      escapeCSV(r.patient_name || ""),
+      escapeCSV(r.patient_dob || ""),
+      escapeCSV(r.patient_gender || ""),
+      escapeCSV(r.patient_id_code || ""),
+      escapeCSV(r.insurance || ""),
+      escapeCSV(r.visit_date || ""),
+      escapeCSV(r.doctor || ""),
+      escapeCSV(r.teeth_chart ? Object.entries(r.teeth_chart).filter(([,v])=>v).map(([k,v])=>`${k}(${v==='affected'?'患部':v==='treated'?'処置済':'欠損'})`).join(' ') : ""),
+      escapeCSV(r.soap_s || ""),
+      escapeCSV(r.soap_o || ""),
+      escapeCSV(r.soap_a || ""),
+      escapeCSV(r.soap_p || ""),
+      escapeCSV(r.transcript || ""),
+    ].join(","));
+
+    const bom = "\uFEFF";
+    const csv = bom + headers.map(h => `"${h}"`).join(",") + "\r\n" + rows.join("\r\n");
+
+    const label = from && to ? `${from}_${to}` : new Date().toISOString().slice(0,10);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="soap_karute_${label.replace(/-/g,"")}.csv"`);
+    res.send(csv);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 const multer = require("multer");
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -417,6 +532,7 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
   <button class="tab active" onclick="showTab('input',this)">新規カルテ</button>
   <button class="tab" onclick="showTab('history',this)">カルテ履歴 <span class="badge" id="hbadge">0</span></button>
   <button class="tab" onclick="showTab('patients',this)">患者管理</button>
+  <button class="tab" onclick="showTab('export',this)">CSV出力</button>
 </nav>
 
 <!-- 新規カルテ -->
@@ -510,7 +626,77 @@ textarea#ta{min-height:130px;line-height:1.8;resize:vertical;margin-bottom:14px;
 </main>
 </div>
 
-<div class="toast" id="toast"></div>
+<!-- CSV出力 -->
+<div class="page" id="page-export">
+<main>
+  <div class="card">
+    <div class="card-hdr">CSV出力 — Dental Queen V3 連携</div>
+    <div class="card-body">
+
+      <div style="background:#e8f5e9;border:1px solid #c8e6c9;border-radius:8px;padding:16px;margin-bottom:20px;">
+        <div style="font-weight:700;color:#2e7d32;margin-bottom:8px">📋 Dental Queen V3 への取り込み手順</div>
+        <div style="font-size:13px;color:#1a1916;line-height:1.8">
+          ① 下のボタンでCSVファイルをダウンロード<br>
+          ② Dental Queen V3 を開く<br>
+          ③「患者情報」→「外部データ取り込み」または「CSV読み込み」を選択<br>
+          ④ ダウンロードしたCSVファイルを選択して取り込む<br>
+          <span style="color:#7a7468;font-size:12px">※取り込み項目の対応はDental Queen V3の仕様に合わせて調整が必要な場合があります</span>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px;">
+
+        <!-- 全件エクスポート -->
+        <div class="card" style="box-shadow:none">
+          <div class="card-hdr">全件エクスポート</div>
+          <div class="card-body">
+            <div style="font-size:13px;color:var(--muted);margin-bottom:14px">保存されているすべてのカルテをCSV形式でダウンロードします。</div>
+            <button class="abtn" onclick="exportAllCSV()" id="exportAllBtn">
+              📥 全件CSVをダウンロード
+            </button>
+          </div>
+        </div>
+
+        <!-- 期間指定エクスポート -->
+        <div class="card" style="box-shadow:none">
+          <div class="card-hdr">期間指定エクスポート</div>
+          <div class="card-body">
+            <div style="font-size:13px;color:var(--muted);margin-bottom:14px">診療日で期間を絞ってCSVをダウンロードします。</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+              <div>
+                <label class="fl">開始日</label>
+                <input type="date" id="csvFrom">
+              </div>
+              <div>
+                <label class="fl">終了日</label>
+                <input type="date" id="csvTo">
+              </div>
+            </div>
+            <button class="abtn" onclick="exportRangeCSV()" id="exportRangeBtn">
+              📥 期間指定CSVをダウンロード
+            </button>
+          </div>
+        </div>
+
+        <!-- CSVフォーマット説明 -->
+        <div class="card" style="box-shadow:none">
+          <div class="card-hdr">出力されるCSVの項目</div>
+          <div class="card-body">
+            <div style="font-size:13px;line-height:2;color:var(--text)">
+              患者氏名 / 生年月日 / 性別 / 患者ID / 保険種別 / 診療日 / 担当医 / 歯式 / S（主訴） / O（所見） / A（診断） / P（計画） / 文字起こしテキスト
+            </div>
+            <div style="margin-top:12px;padding:10px 14px;background:var(--surface2);border-radius:6px;font-size:12px;color:var(--muted)">
+              ✅ BOM付きUTF-8形式（Excel・Windowsで文字化けなし）<br>
+              ✅ Dental Queen V3への手動取り込みに対応したフォーマット
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</main>
+</div>
 
 <script>
 document.getElementById('pDate').value=new Date().toISOString().slice(0,10);
@@ -813,7 +999,55 @@ function toast(msg,type=''){
   el._t=setTimeout(()=>el.style.display='none',type?5000:2500);
 }
 
-// ── 認証 ────────────────────────────────────────────────
+// CSV出力
+async function exportAllCSV(){
+  const btn=document.getElementById('exportAllBtn');
+  btn.disabled=true;btn.textContent='ダウンロード中...';
+  try{
+    const r=await fetch('/api/export-csv',{headers:{'Authorization':'Bearer '+getToken()}});
+    if(!r.ok){const d=await r.json();throw new Error(d.error);}
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download='soap_karute_all.csv';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    toast('CSVをダウンロードしました');
+  }catch(e){toast('エラー: '+e.message,'err');}
+  btn.disabled=false;btn.innerHTML='📥 全件CSVをダウンロード';
+}
+
+async function exportRangeCSV(){
+  const from=document.getElementById('csvFrom').value;
+  const to=document.getElementById('csvTo').value;
+  if(!from||!to){toast('開始日と終了日を選択してください','err');return;}
+  const btn=document.getElementById('exportRangeBtn');
+  btn.disabled=true;btn.textContent='ダウンロード中...';
+  try{
+    const r=await fetch(\`/api/export-csv/range?from=\${from}&to=\${to}\`,{headers:{'Authorization':'Bearer '+getToken()}});
+    if(!r.ok){const d=await r.json();throw new Error(d.error);}
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=\`soap_karute_\${from}_\${to}.csv\`.replace(/-/g,'');
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    toast('CSVをダウンロードしました');
+  }catch(e){toast('エラー: '+e.message,'err');}
+  btn.disabled=false;btn.innerHTML='📥 期間指定CSVをダウンロード';
+}
+
+// デフォルト期間（今月）
+const today=new Date();
+const firstDay=new Date(today.getFullYear(),today.getMonth(),1).toISOString().slice(0,10);
+document.addEventListener('DOMContentLoaded',()=>{
+  const csvFrom=document.getElementById('csvFrom');
+  const csvTo=document.getElementById('csvTo');
+  if(csvFrom)csvFrom.value=firstDay;
+  if(csvTo)csvTo.value=today.toISOString().slice(0,10);
+});
 let authToken=null;
 let currentUser=null;
 
