@@ -123,7 +123,10 @@ app.get("/api/patients", requireAuth, async (req, res) => {
 
 app.post("/api/patients", requireAuth, async (req, res) => {
   const r = await sbFetch("patients", { method: "POST", body: JSON.stringify(req.body) });
-  if (!r.ok) return res.status(500).json({ error: "保存失敗" });
+  if (!r.ok) {
+    console.error("patients POST error:", JSON.stringify(r.data));
+    return res.status(500).json({ error: "患者保存失敗: " + JSON.stringify(r.data) });
+  }
   res.json(Array.isArray(r.data) ? r.data[0] : r.data);
 });
 
@@ -1048,6 +1051,7 @@ function calcAge(dob){
 }
 function toast(msg,type=''){
   const el=document.getElementById('toast');
+  if(!el)return;
   el.textContent=msg;el.className='toast'+(type?' '+type:'');
   el.style.display='block';clearTimeout(el._t);
   el._t=setTimeout(()=>el.style.display='none',type?5000:2500);
@@ -1203,6 +1207,7 @@ async function changePassword(){
 }
 </script>
 </div><!-- /app-wrap -->
+<div class="toast" id="toast"></div>
 </body>
 </html>`);
 });
