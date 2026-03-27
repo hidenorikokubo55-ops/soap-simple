@@ -52,6 +52,21 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+// ── トークンリフレッシュAPI ──────────────────────────────
+app.post("/api/login/refresh", async (req, res) => {
+  const token = req.headers.authorization?.replace("Bearer ", "") || req.body?.token;
+  if (!token) return res.status(400).json({ error: "トークンが必要です" });
+  try {
+    const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` }
+    });
+    if (!r.ok) return res.status(401).json({ error: "セッションが無効です" });
+    res.json({ access_token: token, ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── ログアウトAPI ────────────────────────────────────────
 app.post("/api/logout", requireAuth, async (req, res) => {
   await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
@@ -125,7 +140,10 @@ app.get("/api/records", requireAuth, async (req, res) => {
 
 app.post("/api/records", requireAuth, async (req, res) => {
   const r = await sbFetch("records", { method: "POST", body: JSON.stringify(req.body) });
-  if (!r.ok) return res.status(500).json({ error: "保存失敗: " + JSON.stringify(r.data) });
+  if (!r.ok) {
+    console.error("Records POST error:", JSON.stringify(r.data));
+    return res.status(500).json({ error: "カルテ保存失敗: " + JSON.stringify(r.data) });
+  }
   res.json(Array.isArray(r.data) ? r.data[0] : r.data);
 });
 
@@ -850,35 +868,50 @@ async function saveRecord(){
   msg.textContent='';msg.className='';
   try{
     const audio_url=currentAudioUrl||null;
+    const visitDate=document.getElementById('pDate').value||new Date().toISOString().slice(0,10);
+    const patName=document.getElementById('pName').value||'（未入力）';
 
-    const pr=await fetch('/api/patients',{method:'POST',headers:authHeaders(),body:JSON.stringify({
-      name:document.getElementById('pName').value||'（未入力）',
-      dob:document.getElementById('pDob').value||null,
-      gender:document.getElementById('pGender').value,
-      patient_id:document.getElementById('pId').value,
-      insurance:document.getElementById('pIns').value,
-      history:document.getElementById('pHist').value,
-    })});
-    const pat=await pr.json();
-    const rr=await fetch('/api/records',{method:'POST',headers:authHeaders(),body:JSON.stringify({
-      patient_id:pat.id,
-      patient_name:document.getElementById('pName').value||'（未入力）',
+    let patId=null;
+    try{
+      const pr=await fetch('/api/patients',{method:'POST',headers:authHeaders(),body:JSON.stringify({
+        name:patName,
+        dob:document.getElementById('pDob').value||null,
+        gender:document.getElementById('pGender').value,
+        patient_id:document.getElementById('pId').value,
+        insurance:document.getElementById('pIns').value,
+        history:document.getElementById('pHist').value,
+      })});
+      const pat=await pr.json();
+      patId=pat?.id||null;
+    }catch(e){console.warn('患者保存エラー（続行）:',e);}
+
+    const recBody={
+      visit_date:visitDate,
+      doctor:document.getElementById('pDoc').value,
+      teeth_chart:toothSt,
+      transcript:document.getElementById('ta').value,
+      soap_s:currentSoap.S,
+      soap_o:currentSoap.O,
+      soap_a:currentSoap.A,
+      soap_p:currentSoap.P,
+      patient_name:patName,
       patient_dob:document.getElementById('pDob').value||null,
       patient_gender:document.getElementById('pGender').value,
       patient_id_code:document.getElementById('pId').value,
       insurance:document.getElementById('pIns').value,
-      visit_date:document.getElementById('pDate').value||new Date().toISOString().slice(0,10),
-      doctor:document.getElementById('pDoc').value,
-      teeth_chart:toothSt,
-      transcript:document.getElementById('ta').value,
-      soap_s:currentSoap.S,soap_o:currentSoap.O,soap_a:currentSoap.A,soap_p:currentSoap.P,
       audio_url,
-    })});
-    if(!rr.ok)throw new Error('カルテの保存に失敗しました');
+    };
+    if(patId)recBody.patient_id=patId;
+
+    const rr=await fetch('/api/records',{method:'POST',headers:authHeaders(),body:JSON.stringify(recBody)});
+    const rd=await rr.json();
+    if(!rr.ok)throw new Error(rd.error||'カルテの保存に失敗しました');
     toast('カルテを保存しました！');
     msg.textContent='✓ クラウドに保存されました';msg.className='ok';
   }catch(e){
+    console.error('saveRecord error:',e);
     toast('保存失敗: '+e.message,'err');
+    msg.textContent='エラー: '+e.message;msg.className='err';
   }
   btn.disabled=false;btn.innerHTML='💾 カルテを保存（クラウド）';
 }
@@ -1071,6 +1104,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 });
 let authToken=null;
 let currentUser=null;
+let tokenRefreshTimer=null;
 
 function getToken(){return authToken||sessionStorage.getItem('token');}
 
@@ -1078,15 +1112,35 @@ function authHeaders(){
   return {'Authorization':'Bearer '+getToken(),'Content-Type':'application/json'};
 }
 
-// 起動時にセッション復元
 window.addEventListener('load',()=>{
   const t=sessionStorage.getItem('token');
   const u=sessionStorage.getItem('user');
   if(t&&u){
     authToken=t;currentUser=JSON.parse(u);
     showApp();
+    startTokenRefresh();
   }
 });
+
+function startTokenRefresh(){
+  if(tokenRefreshTimer)clearInterval(tokenRefreshTimer);
+  tokenRefreshTimer=setInterval(async()=>{
+    try{
+      const r=await fetch('/api/login/refresh',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({token:getToken()})
+      });
+      if(r.ok){
+        const d=await r.json();
+        if(d.access_token){
+          authToken=d.access_token;
+          sessionStorage.setItem('token',d.access_token);
+        }
+      }
+    }catch(e){}
+  },30*60*1000);
+}
 
 async function doLogin(){
   const email=document.getElementById('loginEmail').value.trim();
@@ -1104,6 +1158,7 @@ async function doLogin(){
     sessionStorage.setItem('token',authToken);
     sessionStorage.setItem('user',JSON.stringify(currentUser));
     showApp();
+    startTokenRefresh();
   }catch(e){
     err.textContent=e.message;
   }
