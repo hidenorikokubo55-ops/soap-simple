@@ -737,19 +737,24 @@ function showTab(t,el){
 
 // 録音
 let mr=null,chunks=[],recOn=false,timerInt=null,sec=0,currentAudioBlob=null;
+let audioUploadPromise=null; // 音声アップロードを並行実行
+let currentAudioUrl=null;    // アップロード済みURL
+
 function toggleRec(){recOn?stopRec():startRec();}
 async function startRec(){
   try{
     const stream=await navigator.mediaDevices.getUserMedia({audio:true});
     const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported&&MediaRecorder.isTypeSupported(t))||'';
     mr=new MediaRecorder(stream,mime?{mimeType:mime}:{});
-    chunks=[];currentAudioBlob=null;
+    chunks=[];currentAudioBlob=null;currentAudioUrl=null;audioUploadPromise=null;
     mr.ondataavailable=e=>{if(e.data?.size>0)chunks.push(e.data);};
     mr.onstop=async()=>{
       const blob=new Blob(chunks,{type:chunks[0]?.type||'audio/mp4'});
       currentAudioBlob=blob;
       document.getElementById('audioEl').src=URL.createObjectURL(blob);
       document.getElementById('audioWrap').style.display='block';
+      // 文字起こしと音声アップロードを並行実行
+      audioUploadPromise=uploadAudioToCloud(blob);
       await sendWhisper(blob);
     };
     mr.start(1000);recOn=true;sec=0;
@@ -770,12 +775,26 @@ function stopRec(){
   document.getElementById('vStatus').className='vs';
   document.getElementById('micSvg').innerHTML='<path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm-1.5 14.93A7 7 0 0 1 5 9H3a9 9 0 0 0 8 8.94V21H9v2h6v-2h-2v-2.07z"/>';
 }
+
+// バックグラウンドで音声をアップロード（保存時に待つだけ）
+async function uploadAudioToCloud(blob){
+  try{
+    const ext=(blob.type||'').includes('mp4')?'mp4':(blob.type||'').includes('ogg')?'ogg':'webm';
+    const fd=new FormData();fd.append('audio',blob,'rec.'+ext);
+    const ar=await fetch('/api/upload-audio',{method:'POST',headers:{'Authorization':'Bearer '+getToken()},body:fd});
+    if(ar.ok){const ad=await ar.json();currentAudioUrl=ad.audio_url;return ad.audio_url;}
+  }catch(e){console.warn('音声アップロード失敗（カルテ保存は続行）:',e);}
+  return null;
+}
+
 async function uploadAudioFile(e){
   const f=e.target.files[0];if(!f)return;
-  currentAudioBlob=f;
+  currentAudioBlob=f;currentAudioUrl=null;
   document.getElementById('audioEl').src=URL.createObjectURL(f);
   document.getElementById('audioWrap').style.display='block';
   document.getElementById('vStatus').textContent='文字起こし中...';
+  // ファイルアップロードも並行で開始
+  audioUploadPromise=uploadAudioToCloud(f);
   await sendWhisper(f);
 }
 async function sendWhisper(blob){
@@ -828,13 +847,22 @@ async function saveRecord(){
   btn.disabled=true;btn.innerHTML='<div class="sp"></div> 保存中...';
   msg.textContent='';msg.className='';
   try{
-    let audio_url=null;
-    if(currentAudioBlob){
-      const ext=(currentAudioBlob.type||'').includes('mp4')?'mp4':(currentAudioBlob.type||'').includes('ogg')?'ogg':'webm';
-      const fd=new FormData();fd.append('audio',currentAudioBlob,'rec.'+ext);
-      const ar=await fetch('/api/upload-audio',{method:'POST',headers:{'Authorization':'Bearer '+getToken()},body:fd});
-      if(ar.ok){const ad=await ar.json();audio_url=ad.audio_url;}
+    // 音声アップロードが完了していない場合は待つ（最大15秒）
+    let audio_url=currentAudioUrl;
+    if(!audio_url && audioUploadPromise){
+      btn.innerHTML='<div class="sp"></div> 音声を保存中...';
+      try{
+        const result=await Promise.race([
+          audioUploadPromise,
+          new Promise((_,r)=>setTimeout(()=>r(new Error('timeout')),15000))
+        ]);
+        audio_url=result;
+      }catch(e){
+        // タイムアウトしても音声なしでカルテは保存続行
+        console.warn('音声アップロードタイムアウト。カルテのみ保存します。');
+      }
     }
+    btn.innerHTML='<div class="sp"></div> カルテを保存中...';
     const pr=await fetch('/api/patients',{method:'POST',headers:authHeaders(),body:JSON.stringify({
       name:document.getElementById('pName').value||'（未入力）',
       dob:document.getElementById('pDob').value||null,
@@ -846,6 +874,11 @@ async function saveRecord(){
     const pat=await pr.json();
     const rr=await fetch('/api/records',{method:'POST',headers:authHeaders(),body:JSON.stringify({
       patient_id:pat.id,
+      patient_name:document.getElementById('pName').value||'（未入力）',
+      patient_dob:document.getElementById('pDob').value||null,
+      patient_gender:document.getElementById('pGender').value,
+      patient_id_code:document.getElementById('pId').value,
+      insurance:document.getElementById('pIns').value,
       visit_date:document.getElementById('pDate').value||new Date().toISOString().slice(0,10),
       doctor:document.getElementById('pDoc').value,
       teeth_chart:toothSt,
